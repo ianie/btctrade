@@ -18,8 +18,30 @@ class Exchange(threading.Thread):
         self.db = None
         self.dbWrite = dbWrite
 
-    def updateDb(self):
-        raise NotImplementedError
+    def updateDb(self, trades):
+        if not self.dbWrite:
+            return
+        try:
+            with self.db:
+                self.db.executemany(
+                    'INSERT INTO %s VALUES (?, ?, ?, ?, ?)' % self.name, trades)
+        except sqlite3.IntegrityError:
+            numWrites = 0
+            for trade in trades:
+                try:
+                    with self.db:
+                        self.db.execute(
+                            'INSERT INTO %s VALUES (?, ?, ?, ?, ?)' % self.name, trade)
+                except sqlite3.IntegrityError:
+                    pass
+                except Exception as e:
+                    logWrite(repr(e))
+                else:
+                    numWrites += 1
+        else:
+            numWrites = len(trades)
+        if numWrites != len(trades):
+            logWrite("Warning: only %d writes." % numWrites, 'warning')
 
     def initDb(self, db=None):
         if not db:
@@ -60,7 +82,7 @@ class Exchange(threading.Thread):
         self._stop.set()
 
 
-class BitFinex(Exchange):
+class Bitfinex(Exchange):
     def __init__(self, dbWrite=True):
         url = 'https://api.bitfinex.com/v1/trades/btcusd'
         interval = 10
@@ -69,7 +91,7 @@ class BitFinex(Exchange):
         self.maxTrades = 2000
         self.tradeTypes = {'buy': 1, 'sell': 0}
         self.prevTrades = []
-        super(BitFinex, self).__init__(name, url, interval, dbWrite)
+        super(Bitfinex, self).__init__(name, url, interval, dbWrite)
 
     def updateDb(self):
         try:
@@ -80,56 +102,20 @@ class BitFinex(Exchange):
             logWrite(str(e))
             return
         
-        pastTradesId = [trade['tid'] for trade in self.prevTrades]
-        newTrades =  [trade for trade in trades if not trade['tid'] in pastTradesId]       
+        # pastTradesId = [trade['tid'] for trade in self.prevTrades]
+        pastTradesId = [trade[0] for trade in self.prevTrades]
+        newTrades =  [(
+            trade['tid'],
+            trade['timestamp'],
+            trade['price'],
+            trade['amount'],
+            self.tradeTypes[trade['type']])
+            for trade in trades if not trade['tid'] in pastTradesId]       
         numNewTrades = len(newTrades)
         
-        if numNewTrades:
-            self.bestSeenTime = max([trade['timestamp'] for trade in newTrades])
-            self.prevTrades = newTrades
-
         logWrite("%d new trades" % numNewTrades)
-
-        pprint(newTrades)
-
-        if self.dbWrite:
-            try:
-                with self.db:
-                    self.db.executemany('INSERT INTO %s VALUES (?, ?, ?, ?, ?)' % self.name,
-                        [(
-                            trade['tid'],
-                            trade['timestamp'],
-                            trade['price'],
-                            trade['amount'],
-                            self.tradeTypes[trade['type']]
-                        ) for trade in newTrades])
-            except sqlite3.IntegrityError:
-                numWrites = 0
-                for trade in trades:
-                    try:
-                        with self.db:
-                            self.db.execute('INSERT INTO %s VALUES (?, ?, ?, ?, ?)' % self.name,
-                                (
-                                    trade['tid'],
-                                    trade['timestamp'],
-                                    trade['price'],
-                                    trade['amount'],
-                                    self.tradeTypes[trade['type']]
-                                ))
-                    except sqlite3.IntegrityError:
-                        pass
-                    except Exception as e:
-                        logWrite(repr(e))
-                    else:
-                        numWrites += 1
-            else:
-                numWrites = numNewTrades
-            if numWrites != numNewTrades:
-                logWrite("Warning: only %d writes." % numWrites, 'warning')
-
-
-
-
-
-
-        
+        if numNewTrades:
+            self.bestSeenTime = max([trade[1] for trade in newTrades])
+            self.prevTrades = newTrades
+            pprint(newTrades)
+            super(Bitfinex, self).updateDb(newTrades)

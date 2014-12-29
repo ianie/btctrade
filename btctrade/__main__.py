@@ -1,9 +1,9 @@
 from time import sleep
 
-from btctrade.collectdata import BitFinex
-b = BitFinex()
+from btctrade.collectdata import Bitfinex
+b = Bitfinex()
 try:
-    b = BitFinex()
+    b = Bitfinex()
     b.start()
     while(True):
         sleep(60)
